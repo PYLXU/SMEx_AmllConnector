@@ -1,0 +1,12 @@
+{
+  "packageId": "amll-connecter",
+  "extName": "[功能扩展] AMLL连接器",
+  "uiName": "AMLL",
+  "version": "0.0.1",
+  "entries": [
+    "amll-protocol.js",
+    "yrc2ttml.js",
+    "main.js"
+  ]
+}
+  
