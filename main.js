@@ -25,9 +25,16 @@ SettingsPage.data.push(
     {
         configItem: 'ext.amll-connector.enabled',
         type: 'boolean',
-        text: '启动连接模式',
-        description: "启动连接模式后，若未连接成功，则每5s会重试",
+        text: '启动应用后自动连接',
         default: false
+    },
+    {
+        type: "button",
+        text: "立即尝试连接Amll Player",
+        button: "连接",
+        onclick: () => {
+            createWebSocket();
+        }
     },
 );
 
@@ -134,9 +141,9 @@ function createWebSocket() {
                 break;
             case 'setVolume':
                 // 检查message.value是否为有效数值
-                if (typeof message.volume === 'number' && isFinite(message.volume)) {
+                if (typeof message.value.volume === 'number' && isFinite(message.value.volume)) {
                     // 确保音量值在有效范围内(0-1)
-                    const volumeValue = Math.max(0, Math.min(1, message.volume));
+                    const volumeValue = Math.max(0, Math.min(1, message.value.volume));
                     config.setItem("volume", volumeValue);
                 }
                 break;
@@ -151,7 +158,6 @@ function createWebSocket() {
 }
 
 // 监听器相关变量
-let progressObserver = null;
 let volumeObserver = null;
 let observerForElement = null;
 let lyricsObserver = null;
@@ -217,32 +223,33 @@ function initializeListeners() {
                             const musicId = config.getItem('currentMusic');
                             if (lastHandle === musicId) return;
                             lastHandle = musicId;
-                            const musicMsg = toBody({
-                                type: 'setMusicInfo',
-                                value: {
-                                    musicId: musicId,
-                                    musicName: document.querySelector('.musicInfo b') ? document.querySelector('.musicInfo b').innerText : '未知音乐',
-                                    albumId: "",
-                                    albumName: "",
-                                    artists: document.querySelector('.musicInfo div') ? document.querySelector('.musicInfo div').innerText.split(',').map(name => ({
-                                        id: name,
-                                        name
-                                    })) : [{id: 'Null', name: '未知歌手'}],
-                                    duration: (() => {
-                                        const durationElement = document.getElementById('progressDuration');
-                                        if (durationElement) {
-                                            const timeString = durationElement.innerHTML.trim();
-                                            const totalMilliseconds = parseTimeString(timeString);
-                                            if (totalMilliseconds !== null) {
-                                                return totalMilliseconds;
+                            setTimeout(() => {
+                                const musicMsg = toBody({
+                                    type: 'setMusicInfo',
+                                    value: {
+                                        musicId: musicId,
+                                        musicName: document.querySelector('.musicInfo b') ? document.querySelector('.musicInfo b').innerText : '未知音乐',
+                                        albumId: "",
+                                        albumName: "",
+                                        artists: document.querySelector('.musicInfo div') ? document.querySelector('.musicInfo div').innerText.split(',').map(name => ({
+                                            id: name,
+                                            name
+                                        })) : [{id: 'Null', name: '未知歌手'}],
+                                        duration: (() => {
+                                            const durationElement = document.getElementById('progressDuration');
+                                            if (durationElement) {
+                                                const timeString = durationElement.innerHTML.trim();
+                                                const totalMilliseconds = parseTimeString(timeString);
+                                                if (totalMilliseconds !== null) {
+                                                    return totalMilliseconds;
+                                                }
                                             }
-                                        }
-                                        return 240000;
-                                    })()
-                                }
-                            });
-                            socket.send(musicMsg);
-
+                                            return 240000;
+                                        })()
+                                    }
+                                });
+                                socket.send(musicMsg);
+                            }, 1000);
                             const lyricsMsg = toBody({
                                 type: 'setLyricFromTTML',
                                 value: {
@@ -295,6 +302,64 @@ function initializeListeners() {
                                             })
                                             .catch(error => {
                                                 console.error('获取网易云歌词失败:', error);
+                                                const lyricsMsg = toBody({
+                                                    type: 'setLyricFromTTML',
+                                                    value: {
+                                                        data: ''
+                                                    },
+                                                });
+                                                socket.send(lyricsMsg);
+                                            });
+
+                                    });
+                            } else if (musicId && musicId.startsWith('qq:')) {
+                                const qqId = musicId.substring(3);
+                                fetch(`https://amll.mirror.dimeta.top/api/db/qq-lyrics/${qqId}.ttml`)
+                                    .then(response => {
+                                        if (!response.ok) {
+                                            throw new Error(`HTTP error! status: ${response.status}`);
+                                        }
+                                        return response.text();
+                                    })
+                                    .then(ttmlData => {
+                                        const lyricsMsg = toBody({
+                                            type: 'setLyricFromTTML',
+                                            value: {
+                                                data: ttmlData
+                                            },
+                                        });
+                                        socket.send(lyricsMsg);
+                                    })
+                                    .catch(error => {
+                                        console.error('获取TTML歌词失败:', error, ",正在尝试从QQMusicApi获取");
+                                        fetch(`https://api.vkeys.cn/v2/music/tencent/lyric?id=${qqId}`)
+                                            .then(response => response.json())
+                                            .then(async qqMusicData => {
+                                                let tempData = {
+                                                    lrc: {lyric: qqMusicData.data.lrc},
+                                                    tlyric: {lyric: qqMusicData.data.trans},
+                                                    yrc: {lyric: qqMusicData.data.yrc},
+                                                    ytlrc: {lyric: qqMusicData.data.yrc}
+                                                }
+                                                let ttmlData = await neteaseToTtmlLrc(tempData, {
+                                                    ncmMusicId: qqId,
+                                                    musicName: document.querySelector('.musicInfo b') ? document.querySelector('.musicInfo b').innerText : '未知音乐',
+                                                    // artists: document.querySelector('.musicInfo div') ? document.querySelector('.musicInfo div').innerText.split(',').map(name => ({
+                                                    //     id: name,
+                                                    //     name
+                                                    // })) : [{id: 'Null', name: '未知歌手'}],
+                                                });
+                                                console.log("TTML数据:", ttmlData);
+                                                const lyricsMsg = toBody({
+                                                    type: 'setLyricFromTTML',
+                                                    value: {
+                                                        data: ttmlData
+                                                    },
+                                                });
+                                                socket.send(lyricsMsg);
+                                            })
+                                            .catch(error => {
+                                                console.error('获取QQ音乐歌词失败:', error);
                                                 const lyricsMsg = toBody({
                                                     type: 'setLyricFromTTML',
                                                     value: {
@@ -379,13 +444,6 @@ function destroyListeners() {
 
 // 处理音频暂停事件
 function handleAudioPause() {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        const pauseMsg = toBody({type: 'onPaused'});
-        socket.send(pauseMsg);
-    }
-}
-
-function handleAudioTimeupdate() {
     if (socket && socket.readyState === WebSocket.OPEN) {
         const pauseMsg = toBody({type: 'onPaused'});
         socket.send(pauseMsg);

@@ -8,6 +8,8 @@ async function neteaseToTtmlLrc(data, options = {}) {
 
     const {lrc, tlyric, yrc, ytlrc} = data;
 
+    console.log('Parsing Netease Music data:', data);
+
     // ================= 工具函数 =================
     function msToTtmlTime(ms) {
         const total = ms / 1000;
@@ -30,36 +32,76 @@ async function neteaseToTtmlLrc(data, options = {}) {
     function parseYrc(lyricText) {
         const lines = lyricText.trim().split(/\r?\n/);
         const result = [];
-        // 修改正则表达式以正确捕获所有内容
-        const lineRegex = /^\[(\d+),(\d+)](.*)$/;
-        const wordRegex = /\((\d+),(\d+),\d+\)([^()]+)/g;
+        // 修改正则表达式以正确处理网易云的三个参数格式
+        const neteaseLineRegex = /^\[(\d+),(\d+),(\d+)](.*)$/;
+        const qqLineRegex = /^\[(\d+),(\d+)](.*)$/;
 
         for (const line of lines) {
-            const match = line.match(lineRegex);
-            if (!match) continue;
+            // 忽略中括号内没有逗号的行
+            if (line.startsWith('[') && line.includes(']') && !line.includes(',')) {
+                continue;
+            }
 
-            const startTime = parseInt(match[1]);
-            const duration = parseInt(match[2]);
-            const endTime = startTime + duration;
-            const content = match[3];
+            let match;
+            let startTime, duration, endTime, content;
+            
+            // 优先匹配网易云格式（三个参数）
+            if ((match = line.match(neteaseLineRegex)) !== null) {
+                startTime = parseInt(match[1]);
+                duration = parseInt(match[2]);
+                // 第三个参数是endTime，但如果有duration，则使用startTime+duration
+                endTime = startTime + duration;
+                content = match[4];
+            } 
+            // 如果不匹配，则尝试QQ音乐格式（两个参数）
+            else if ((match = line.match(qqLineRegex)) !== null) {
+                startTime = parseInt(match[1]);
+                duration = parseInt(match[2]);
+                endTime = startTime + duration;
+                content = match[3];
+            } else {
+                continue;
+            }
 
             const words = [];
-            let wordMatch;
-            // 修复：确保能正确处理所有单词
-            while ((wordMatch = wordRegex.exec(content)) !== null) {
-                const wStart = parseInt(wordMatch[1]);
-                const wDur = parseInt(wordMatch[2]);
+            
+            // 处理网易云格式：(时间,持续时间)文字
+            const neteaseWordRegex = /\((\d+),(\d+),(\d+)\)([^($]*)/g;
+            let neteaseMatch;
+            let hasNeteaseFormat = false;
+            while ((neteaseMatch = neteaseWordRegex.exec(content)) !== null) {
+                hasNeteaseFormat = true;
+                const wStart = parseInt(neteaseMatch[1]);
+                const wDur = parseInt(neteaseMatch[2]);
+                if(neteaseMatch[4] === undefined) hasNeteaseFormat = false;
+                const wText = neteaseMatch[4];
                 words.push({
-                    text: wordMatch[3],
+                    text: wText,
                     start: wStart,
                     end: wStart + wDur
                 });
             }
 
+            // 如果没有匹配到网易云格式，则尝试匹配QQ音乐格式：文字(时间,持续时间)
+            if (!hasNeteaseFormat) {
+                const qqWordRegex = /([^($]*)\((\d+),(\d+)\)/g;
+                let qqMatch;
+                while ((qqMatch = qqWordRegex.exec(content)) !== null) {
+                    const wStart = parseInt(qqMatch[2]);
+                    const wDur = parseInt(qqMatch[3]);
+                    const wText = qqMatch[1];
+                    words.push({
+                        text: wText,
+                        start: wStart,
+                        end: wStart + wDur
+                    });
+                }
+            }
+
             // 修复：处理没有被wordRegex匹配到的纯文本行
             if (words.length === 0 && content.trim()) {
                 words.push({
-                    text: content.replace(/^\((.*)\)$/, '$1'), // 移除可能存在的括号
+                    text: content,
                     start: startTime,
                     end: endTime
                 });
@@ -165,7 +207,7 @@ async function neteaseToTtmlLrc(data, options = {}) {
     let lyricData = null;
 
     // 1. 优先解析 yrc
-    if (yrc?.version > 0 && yrc.lyric?.trim()) {
+    if (yrc && yrc.lyric?.trim()) {
         lyricData = parseYrc(yrc.lyric);
     }
 

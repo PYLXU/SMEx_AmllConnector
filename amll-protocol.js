@@ -142,6 +142,8 @@ function toBody(body) {
             break;
 
         case 'onVolumeChanged':
+            parts.push(writeF64(body.value.volume));
+            break;
         case 'setVolume':
             parts.push(writeF64(body.value.volume));
             break;
